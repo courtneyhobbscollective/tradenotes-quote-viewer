@@ -113,10 +113,16 @@
 
     function openWhatsApp(phone, message) {
       const text = encodeURIComponent(message || '');
-      const url = phone
-        ? 'https://wa.me/' + phone + '?text=' + text
-        : 'https://wa.me/?text=' + text;
-      window.location.href = url;
+      // Without a tradesperson number, wa.me/?text= opens the contact picker.
+      // Prefer deep-linking into their chat; otherwise leave a copyable draft.
+      if (!phone) {
+        try {
+          if (navigator.clipboard && message) navigator.clipboard.writeText(message);
+        } catch (e) {}
+        alert('Your reply was saved. The tradesperson has not set a WhatsApp number on this quote, so we cannot open their chat automatically. The message is copied if your browser allows — paste it into your existing WhatsApp conversation with them.');
+        return;
+      }
+      window.location.href = 'https://wa.me/' + phone + '?text=' + text;
     }
 
     function statusBanner(status) {
