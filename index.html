@@ -35,6 +35,27 @@
     .totals .row.total { margin-top:6px; padding-top:12px; border-top:2px solid #111827; color:#111827; font-size:18px; font-weight:800; }
     .footer { margin-top:18px; text-align:center; color:#94a3b8; font-size:12px; }
     .err { padding:40px 20px; text-align:center; color:#6b7280; }
+    .actions { margin-top:22px; padding-top:18px; border-top:1px solid #eef2f7; }
+    .actions h2 { margin:0 0 6px; font-size:16px; }
+    .actions .hint { margin:0 0 14px; color:#6b7280; font-size:13px; line-height:1.4; }
+    .btn-row { display:flex; flex-wrap:wrap; gap:10px; }
+    button.btn { flex:1; min-width:110px; border:0; border-radius:10px; padding:14px 12px; font-size:15px; font-weight:700; cursor:pointer; }
+    button.btn:disabled { opacity:.55; cursor:default; }
+    .btn-accept { background:#16a34a; color:#fff; }
+    .btn-reject { background:#fff; color:#b91c1c; border:1.5px solid #fecaca !important; }
+    .btn-query { background:#fff; color:#2563eb; border:1.5px solid #bfdbfe !important; }
+    .panel { display:none; margin-top:14px; background:#f8fafc; border-radius:12px; padding:14px; }
+    .panel.open { display:block; }
+    .panel label { display:block; font-size:12px; font-weight:700; color:#6b7280; margin-bottom:6px; }
+    .panel textarea, .panel input { width:100%; box-sizing:border-box; border:1px solid #d1d5db; border-radius:8px; padding:12px; font-size:15px; margin-bottom:10px; font-family:inherit; }
+    .panel textarea { min-height:96px; resize:vertical; }
+    .panel .go { width:100%; background:#111827; color:#fff; border:0; border-radius:10px; padding:13px; font-weight:700; font-size:15px; cursor:pointer; }
+    .panel .go:disabled { opacity:.55; }
+    .status-banner { margin-top:16px; border-radius:10px; padding:12px 14px; font-size:14px; font-weight:600; }
+    .status-banner.ok { background:#ecfdf5; color:#047857; }
+    .status-banner.warn { background:#fff7ed; color:#c2410c; }
+    .status-banner.bad { background:#fef2f2; color:#b91c1c; }
+    .status-banner.info { background:#eff6ff; color:#1d4ed8; }
   </style>
 </head>
 <body>
@@ -70,6 +91,146 @@
       return '';
     }
 
+    async function rpc(name, body) {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + name, {
+        method: 'POST',
+        headers: {
+          apikey: ANON_KEY,
+          Authorization: 'Bearer ' + ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!res.ok) {
+        const err = (data && data.message) || text || 'Request failed';
+        throw new Error(err);
+      }
+      return data;
+    }
+
+    function openWhatsApp(phone, message) {
+      const text = encodeURIComponent(message || '');
+      const url = phone
+        ? 'https://wa.me/' + phone + '?text=' + text
+        : 'https://wa.me/?text=' + text;
+      window.location.href = url;
+    }
+
+    function statusBanner(status) {
+      if (status === 'accepted') return '<div class="status-banner ok">You accepted this quote. Thanks — open WhatsApp to confirm with the tradesperson if it didn’t open automatically.</div>';
+      if (status === 'declined') return '<div class="status-banner bad">You declined this quote.</div>';
+      if (status === 'queried') return '<div class="status-banner info">Your question has been sent to the tradesperson.</div>';
+      return '';
+    }
+
+    function actionsHtml(payload) {
+      const locked = ['accepted', 'declined'].includes(payload.status);
+      if (locked) return statusBanner(payload.status);
+      if (payload.status === 'queried') {
+        return statusBanner('queried') +
+          '<div class="actions"><p class="hint">You can still accept or decline below once you’ve had a reply.</p>' +
+          actionButtons() + responsePanels() + '</div>';
+      }
+      return '<div class="actions"><h2>What would you like to do?</h2>' +
+        '<p class="hint">Accept, decline, or ask a question. We’ll draft a WhatsApp message for you to send.</p>' +
+        actionButtons() + responsePanels() + '<div id="action-error" class="status-banner bad" style="display:none"></div></div>';
+    }
+
+    function actionButtons() {
+      return '<div class="btn-row">' +
+        '<button type="button" class="btn btn-accept" data-open="accept">Accept</button>' +
+        '<button type="button" class="btn btn-reject" data-open="reject">Reject</button>' +
+        '<button type="button" class="btn btn-query" data-open="query">Query</button>' +
+      '</div>';
+    }
+
+    function responsePanels() {
+      return '' +
+        '<div id="panel-accept" class="panel">' +
+          '<label for="accept-name">Your name (optional)</label>' +
+          '<input id="accept-name" type="text" placeholder="e.g. Sam" />' +
+          '<button type="button" class="go" data-submit="accept">Accept quote &amp; open WhatsApp</button>' +
+        '</div>' +
+        '<div id="panel-reject" class="panel">' +
+          '<label for="reject-reason">Why are you declining?</label>' +
+          '<textarea id="reject-reason" placeholder="e.g. Timing doesn’t work / gone with another quote"></textarea>' +
+          '<button type="button" class="go" data-submit="reject">Decline &amp; open WhatsApp</button>' +
+        '</div>' +
+        '<div id="panel-query" class="panel">' +
+          '<label for="query-message">Your question</label>' +
+          '<textarea id="query-message" placeholder="What would you like to ask?"></textarea>' +
+          '<button type="button" class="go" data-submit="query">Send query via WhatsApp</button>' +
+        '</div>';
+    }
+
+    function wireActions(token, payload) {
+      const root = document.getElementById('app');
+      root.querySelectorAll('[data-open]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const which = btn.getAttribute('data-open');
+          ['accept','reject','query'].forEach((k) => {
+            const panel = document.getElementById('panel-' + k);
+            if (panel) panel.classList.toggle('open', k === which);
+          });
+        });
+      });
+
+      root.querySelectorAll('[data-submit]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const action = btn.getAttribute('data-submit');
+          const errEl = document.getElementById('action-error');
+          if (errEl) errEl.style.display = 'none';
+          let message = null;
+          let customerName = null;
+          if (action === 'accept') {
+            customerName = (document.getElementById('accept-name') || {}).value || null;
+          } else if (action === 'reject') {
+            message = (document.getElementById('reject-reason') || {}).value || '';
+            if (!message.trim()) {
+              if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please add a short reason for declining.'; }
+              return;
+            }
+          } else if (action === 'query') {
+            message = (document.getElementById('query-message') || {}).value || '';
+            if (!message.trim()) {
+              if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please type your question.'; }
+              return;
+            }
+          }
+
+          btn.disabled = true;
+          const prev = btn.textContent;
+          btn.textContent = 'Sending…';
+          try {
+            const result = await rpc('respond_to_public_quote', {
+              p_token: token,
+              p_action: action,
+              p_message: message,
+              p_customer_name: customerName,
+            });
+            if (!result || result.ok === false) {
+              throw new Error((result && result.error) || 'Could not save your response');
+            }
+            openWhatsApp(result.whatsapp_phone, result.drafted_message);
+            // Re-render locked state if user returns
+            payload.status = result.status;
+            const actions = root.querySelector('.actions');
+            if (actions) actions.outerHTML = actionsHtml(payload);
+          } catch (e) {
+            if (errEl) {
+              errEl.style.display = 'block';
+              errEl.textContent = e.message || 'Something went wrong. Please try again.';
+            }
+            btn.disabled = false;
+            btn.textContent = prev;
+          }
+        });
+      });
+    }
+
     async function main() {
       const token = tokenFromLocation();
       const app = document.getElementById('app');
@@ -78,17 +239,7 @@
         return;
       }
       try {
-        const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/get_public_quote', {
-          method: 'POST',
-          headers: {
-            apikey: ANON_KEY,
-            Authorization: 'Bearer ' + ANON_KEY,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ p_token: token }),
-        });
-        if (!res.ok) throw new Error('not found');
-        const payload = await res.json();
+        const payload = await rpc('get_public_quote', { p_token: token });
         if (!payload) throw new Error('not found');
 
         const header = sanitizeColor(payload.branding && payload.branding.brand_primary_color, '#2563eb');
@@ -112,8 +263,6 @@
           : '';
 
         document.title = businessName + ' — Quote ' + number;
-        document.documentElement.style.setProperty('--header', header);
-        document.documentElement.style.setProperty('--ink', ink);
 
         app.innerHTML =
           '<div class="card">' +
@@ -130,9 +279,12 @@
                 '<div class="row"><span>VAT</span><span>' + pounds(payload.vat_pence) + '</span></div>' +
                 '<div class="row total"><span>Total</span><span>' + pounds(payload.total_pence) + '</span></div>' +
               '</div>' +
+              actionsHtml(payload) +
             '</div>' +
           '</div>' +
           '<p class="footer">' + esc(businessName) + ' · quote ' + esc(number) + '</p>';
+
+        wireActions(token, payload);
       } catch (e) {
         app.innerHTML = '<p class="err">Quote not found.</p>';
       }
