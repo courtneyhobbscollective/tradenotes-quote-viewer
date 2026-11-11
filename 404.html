@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quote</title>
+  <style>
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#eef2f7; color:#111827; }
+    .shell { max-width:640px; margin:0 auto; padding:28px 14px 48px; }
+    .card { background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 10px 30px rgba(15,23,42,.08); }
+    .header { min-height:112px; padding:28px 24px; display:flex; align-items:center; justify-content:center; }
+    .logo { max-width:180px; max-height:64px; object-fit:contain; display:block; }
+    .logo-fallback { width:52px; height:52px; border-radius:14px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:22px; }
+    .body { padding:24px; }
+    .identity { display:flex; justify-content:space-between; gap:16px; margin-bottom:18px; padding-bottom:16px; border-bottom:1px solid #eef2f7; }
+    .biz { margin:0; font-size:18px; font-weight:700; }
+    .doc-tag { text-align:right; }
+    .doc-tag .label { margin:0; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#6b7280; }
+    .doc-tag .number { margin:4px 0 0; font-size:20px; font-weight:800; }
+    .intro { display:flex; justify-content:space-between; gap:16px; margin-bottom:20px; }
+    .intro h1 { margin:0 0 4px; font-size:22px; }
+    .intro p, .meta { margin:0; color:#6b7280; font-size:14px; }
+    .meta { text-align:right; font-size:13px; }
+    .meta strong { display:block; color:#111827; font-size:14px; }
+    .note { background:#f8fafc; border-radius:8px; padding:10px 12px; margin-bottom:16px; }
+    .note .eye { color:#64748b; font-size:10px; font-weight:700; text-transform:uppercase; margin-bottom:3px; }
+    .note p { margin:0; font-size:13px; line-height:1.45; font-weight:500; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    thead th { background:#f8fafc; color:#6b7280; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; text-align:left; padding:12px 8px; border-bottom:1px solid #e5e7eb; }
+    tbody td { padding:14px 8px; border-bottom:1px solid #e5e7eb; font-size:14px; vertical-align:top; }
+    .num { text-align:right; white-space:nowrap; color:#374151; }
+    th.qty, td.qty { width:52px; } th.price, td.price { width:88px; } th.total, td.total { width:88px; }
+    .totals { margin-top:14px; margin-left:auto; width:min(280px,100%); }
+    .totals .row { display:flex; justify-content:space-between; padding:8px 0; font-size:14px; color:#4b5563; }
+    .totals .row.total { margin-top:6px; padding-top:12px; border-top:2px solid #111827; color:#111827; font-size:18px; font-weight:800; }
+    .footer { margin-top:18px; text-align:center; color:#94a3b8; font-size:12px; }
+    .err { padding:40px 20px; text-align:center; color:#6b7280; }
+  </style>
+</head>
+<body>
+  <div id="app" class="shell"><p class="err">Loading quote…</p></div>
+  <script>
+    const SUPABASE_URL = 'https://zqjbcvmiqapwribvebtn.supabase.co';
+    const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpxamJjdm1pcWFwd3JpYnZlYnRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExOTcwMjksImV4cCI6MjA5Njc3MzAyOX0.uCu_9R3d_DeL2UgvjILXtQIlF45xt3QNGNtdRbxDLrg';
+
+    function esc(v) {
+      return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function pounds(p) { return '£' + (Number(p) / 100).toFixed(2); }
+    function sanitizeColor(v, fb) { return /^#([0-9a-fA-F]{6})$/.test((v||'').trim()) ? v.trim() : fb; }
+    function contrast(bg) {
+      const h = sanitizeColor(bg,'#2563eb').slice(1);
+      const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16);
+      return ((0.299*r+0.587*g+0.114*b)/255) > 0.62 ? '#111827' : '#ffffff';
+    }
+    function docNum(n) { return (!n || n < 1) ? 'Q-····' : 'Q-' + String(n).padStart(4,'0'); }
+    function docDate(v) {
+      const d = v ? new Date(v) : new Date();
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+    }
+    function tokenFromLocation() {
+      const path = location.pathname.replace(/\/+$/, '');
+      const parts = path.split('/').filter(Boolean);
+      const last = parts[parts.length - 1];
+      if (last && last !== 'index.html' && last !== 'q' && !last.includes('.')) return last;
+      const q = new URLSearchParams(location.search).get('t');
+      if (q) return q;
+      const hash = location.hash.replace(/^#/, '').trim();
+      return hash || '';
+    }
+
+    async function main() {
+      const token = tokenFromLocation();
+      const app = document.getElementById('app');
+      if (!token) {
+        app.innerHTML = '<p class="err">Missing quote link.</p>';
+        return;
+      }
+      try {
+        const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/get_public_quote', {
+          method: 'POST',
+          headers: {
+            apikey: ANON_KEY,
+            Authorization: 'Bearer ' + ANON_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ p_token: token }),
+        });
+        if (!res.ok) throw new Error('not found');
+        const payload = await res.json();
+        if (!payload) throw new Error('not found');
+
+        const header = sanitizeColor(payload.branding && payload.branding.brand_primary_color, '#2563eb');
+        const ink = sanitizeColor(payload.branding && payload.branding.brand_secondary_color, '#111827');
+        const onHeader = contrast(header);
+        const businessName = (payload.branding && payload.branding.business_name && payload.branding.business_name.trim()) || 'Your business';
+        const number = docNum(payload.quote_number);
+        const issued = docDate(payload.sent_at || payload.created_at);
+        const trade = payload.trade_type ? payload.trade_type.charAt(0).toUpperCase() + payload.trade_type.slice(1) : 'Trade';
+        const logoPath = payload.branding && payload.branding.logo_path;
+        const logoUrl = logoPath ? (SUPABASE_URL + '/storage/v1/object/public/branding/' + logoPath) : null;
+        const logoHtml = logoUrl
+          ? '<img class="logo" src="' + esc(logoUrl) + '" alt="" />'
+          : '<div class="logo-fallback" style="color:' + onHeader + ';background:' + (onHeader === '#ffffff' ? 'rgba(255,255,255,.18)' : 'rgba(17,24,39,.12)') + '">' + esc(businessName.slice(0,1).toUpperCase()) + '</div>';
+        const items = (payload.items || []).slice().sort((a,b) => a.sort_order - b.sort_order);
+        const rows = items.map(item =>
+          '<tr><td>' + esc(item.description) + '</td><td class="num qty">' + esc(item.quantity) + '</td><td class="num price">' + pounds(item.unit_price_pence) + '</td><td class="num total">' + pounds(item.line_total_pence) + '</td></tr>'
+        ).join('');
+        const noteHtml = payload.notes
+          ? '<div class="note"><div class="eye">Please note</div><p>' + esc(payload.notes) + '</p></div>'
+          : '';
+
+        document.title = businessName + ' — Quote ' + number;
+        document.documentElement.style.setProperty('--header', header);
+        document.documentElement.style.setProperty('--ink', ink);
+
+        app.innerHTML =
+          '<div class="card">' +
+            '<div class="header" style="background:' + header + '">' + logoHtml + '</div>' +
+            '<div class="body" style="color:' + ink + '">' +
+              '<div class="identity"><p class="biz">' + esc(businessName) + '</p>' +
+                '<div class="doc-tag"><p class="label">Quote</p><p class="number">' + esc(number) + '</p></div></div>' +
+              '<div class="intro"><div><h1>Quote for ' + esc(payload.customer_name || 'Customer') + '</h1><p>' + esc(trade) + ' · Prepared with care</p></div>' +
+                '<div class="meta">' + (issued ? '<strong>' + esc(issued) + '</strong>' : '') + '<span>' + esc(number) + '</span></div></div>' +
+              noteHtml +
+              '<table><thead><tr><th>Item</th><th class="num qty">Qty</th><th class="num price">Price</th><th class="num total">Total</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+              '<div class="totals">' +
+                '<div class="row"><span>Subtotal</span><span>' + pounds(payload.subtotal_pence) + '</span></div>' +
+                '<div class="row"><span>VAT</span><span>' + pounds(payload.vat_pence) + '</span></div>' +
+                '<div class="row total"><span>Total</span><span>' + pounds(payload.total_pence) + '</span></div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<p class="footer">' + esc(businessName) + ' · quote ' + esc(number) + '</p>';
+      } catch (e) {
+        app.innerHTML = '<p class="err">Quote not found.</p>';
+      }
+    }
+    main();
+  </script>
+</body>
+</html>
