@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Confirm booking</title>
+  <style>
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#eef2f7; color:#111827; }
+    .shell { max-width:520px; margin:0 auto; padding:28px 14px 48px; }
+    .card { background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 10px 30px rgba(15,23,42,.08); }
+    .header { min-height:88px; padding:22px 20px; display:flex; align-items:center; justify-content:center; }
+    .logo { max-width:160px; max-height:52px; object-fit:contain; display:block; }
+    .body { padding:22px; }
+    h1 { margin:0 0 8px; font-size:22px; }
+    p { margin:0 0 10px; color:#4b5563; line-height:1.45; font-size:15px; }
+    .slot { background:#f8fafc; border-radius:12px; padding:14px; margin:16px 0; }
+    .slot strong { display:block; font-size:18px; color:#111827; margin-top:4px; }
+    .btn-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
+    button { flex:1; min-width:140px; border:0; border-radius:10px; padding:14px; font-size:15px; font-weight:700; cursor:pointer; }
+    .yes { background:#16a34a; color:#fff; }
+    .no { background:#fff; color:#b91c1c; border:1.5px solid #fecaca; }
+    button:disabled { opacity:.55; }
+    .banner { margin-top:14px; border-radius:10px; padding:12px 14px; font-size:14px; font-weight:600; }
+    .ok { background:#ecfdf5; color:#047857; }
+    .bad { background:#fef2f2; color:#b91c1c; }
+    .err { padding:40px 20px; text-align:center; color:#6b7280; }
+  </style>
+</head>
+<body>
+  <div id="app" class="shell"><p class="err">Loading booking…</p></div>
+  <script>
+    const SUPABASE_URL = 'https://zqjbcvmiqapwribvebtn.supabase.co';
+    const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpxamJjdm1pcWFwd3JpYnZlYnRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExOTcwMjksImV4cCI6MjA5Njc3MzAyOX0.uCu_9R3d_DeL2UgvjILXtQIlF45xt3QNGNtdRbxDLrg';
+
+    function esc(v) {
+      return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function sanitizeColor(v, fb) { return /^#([0-9a-fA-F]{6})$/.test((v||'').trim()) ? v.trim() : fb; }
+    function tokenFromLocation() {
+      return (new URLSearchParams(location.search).get('t') || '').trim();
+    }
+    function niceWhen(v) {
+      const d = v ? new Date(v) : null;
+      if (!d || Number.isNaN(d.getTime())) return 'the proposed time';
+      return d.toLocaleString('en-GB', { weekday:'long', day:'numeric', month:'long', hour:'2-digit', minute:'2-digit' });
+    }
+    async function rpc(name, body) {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + name, {
+        method: 'POST',
+        headers: {
+          apikey: ANON_KEY,
+          Authorization: 'Bearer ' + ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!res.ok) throw new Error((data && data.message) || text || 'Request failed');
+      return data;
+    }
+
+    async function main() {
+      const app = document.getElementById('app');
+      const token = tokenFromLocation();
+      if (!token) {
+        app.innerHTML = '<p class="err">Booking link missing.</p>';
+        return;
+      }
+      try {
+        const payload = await rpc('get_public_booking', { p_token: token });
+        if (!payload) throw new Error('not found');
+        const brand = payload.branding || {};
+        const primary = sanitizeColor(brand.brand_primary_color, '#2563eb');
+        const logoPath = brand.logo_path;
+        const logoUrl = logoPath
+          ? SUPABASE_URL + '/storage/v1/object/public/branding/' + logoPath
+          : null;
+        const biz = brand.business_name || 'Your tradesperson';
+        const when = niceWhen(payload.proposed_scheduled_at || payload.scheduled_at);
+        const locked = payload.booking_status === 'confirmed' || payload.booking_status === 'declined';
+
+        function render(status) {
+          let actions = '';
+          if (status === 'confirmed') {
+            actions = '<div class="banner ok">Thanks — this booking is confirmed.</div>';
+          } else if (status === 'declined') {
+            actions = '<div class="banner bad">Thanks for letting them know. They’ll be in touch with another time.</div>';
+          } else {
+            actions =
+              '<div class="btn-row">' +
+                '<button type="button" class="yes" id="confirm">Yes, that works</button>' +
+                '<button type="button" class="no" id="decline">Can’t make it</button>' +
+              '</div>' +
+              '<div id="err" class="banner bad" style="display:none"></div>';
+          }
+          app.innerHTML =
+            '<div class="card">' +
+              '<div class="header" style="background:' + primary + '">' +
+                (logoUrl
+                  ? '<img class="logo" src="' + esc(logoUrl) + '" alt="" />'
+                  : '<div style="color:#fff;font-weight:800;font-size:18px">' + esc(biz) + '</div>') +
+              '</div>' +
+              '<div class="body">' +
+                '<h1>Confirm your booking</h1>' +
+                '<p>' + esc(biz) + ' has suggested a time for your job' +
+                  (payload.address ? ' at ' + esc(payload.address) : '') + '.</p>' +
+                '<div class="slot"><span style="font-size:12px;font-weight:700;color:#6b7280;text-transform:uppercase">Proposed time</span><strong>' +
+                  esc(when) + '</strong></div>' +
+                actions +
+              '</div>' +
+            '</div>';
+
+          if (!locked) {
+            const err = document.getElementById('err');
+            const wire = (id, action) => {
+              document.getElementById(id).addEventListener('click', async () => {
+                const btn = document.getElementById(id);
+                btn.disabled = true;
+                try {
+                  const result = await rpc('respond_to_public_booking', {
+                    p_token: token,
+                    p_action: action,
+                  });
+                  if (!result || result.ok === false) throw new Error((result && result.error) || 'Could not save');
+                  render(result.status);
+                } catch (e) {
+                  if (err) {
+                    err.style.display = 'block';
+                    err.textContent = e.message || 'Something went wrong';
+                  }
+                  btn.disabled = false;
+                }
+              });
+            };
+            wire('confirm', 'confirm');
+            wire('decline', 'decline');
+          }
+        }
+
+        render(payload.booking_status);
+      } catch (e) {
+        app.innerHTML = '<p class="err">Booking not found.</p>';
+      }
+    }
+    main();
+  </script>
+</body>
+</html>
