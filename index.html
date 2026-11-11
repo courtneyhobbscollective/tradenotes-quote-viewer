@@ -56,6 +56,11 @@
     .status-banner.warn { background:#fff7ed; color:#c2410c; }
     .status-banner.bad { background:#fef2f2; color:#b91c1c; }
     .status-banner.info { background:#eff6ff; color:#1d4ed8; }
+    .sig-wrap { background:#fff; border:1px solid #d1d5db; border-radius:8px; margin-bottom:10px; overflow:hidden; }
+    .sig-wrap canvas { display:block; width:100%; height:140px; touch-action:none; background:#fff; }
+    .sig-tools { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-top:1px solid #e5e7eb; background:#f8fafc; }
+    .sig-tools button { border:0; background:transparent; color:#2563eb; font-weight:700; font-size:13px; cursor:pointer; padding:0; }
+    .sig-hint { font-size:12px; color:#9ca3af; }
   </style>
 </head>
 <body>
@@ -125,8 +130,8 @@
       window.location.href = 'https://wa.me/' + phone + '?text=' + text;
     }
 
-    function statusBanner(status) {
-      if (status === 'accepted') return '<div class="status-banner ok">You accepted this quote. Thanks — open WhatsApp to confirm with the tradesperson if it didn’t open automatically.</div>';
+    function statusBanner(status, payload) {
+      if (status === 'accepted') return '<div class="status-banner ok">You accepted this quote' + (payload && payload.accepted_by_name ? ' as <strong>' + esc(payload.accepted_by_name) + '</strong>' : '') + '. Thanks — open WhatsApp to confirm with the tradesperson if it didn’t open automatically.</div>';
       if (status === 'declined') return '<div class="status-banner bad">You declined this quote.</div>';
       if (status === 'queried') return '<div class="status-banner info">Your question has been sent to the tradesperson.</div>';
       return '';
@@ -134,9 +139,9 @@
 
     function actionsHtml(payload) {
       const locked = ['accepted', 'declined'].includes(payload.status);
-      if (locked) return statusBanner(payload.status);
+      if (locked) return statusBanner(payload.status, payload);
       if (payload.status === 'queried') {
-        return statusBanner('queried') +
+        return statusBanner('queried', payload) +
           '<div class="actions"><p class="hint">You can still accept or decline below once you’ve had a reply.</p>' +
           actionButtons() + responsePanels() + '</div>';
       }
@@ -156,8 +161,13 @@
     function responsePanels() {
       return '' +
         '<div id="panel-accept" class="panel">' +
-          '<label for="accept-name">Your name (optional)</label>' +
-          '<input id="accept-name" type="text" placeholder="e.g. Sam" />' +
+          '<label for="accept-name">Full name</label>' +
+          '<input id="accept-name" type="text" placeholder="Type your full name" autocomplete="name" />' +
+          '<label>Signature</label>' +
+          '<div class="sig-wrap">' +
+            '<canvas id="accept-signature" width="600" height="140"></canvas>' +
+            '<div class="sig-tools"><span class="sig-hint">Sign above with your finger</span><button type="button" id="clear-signature">Clear</button></div>' +
+          '</div>' +
           '<button type="button" class="go" data-submit="accept">Accept quote &amp; open WhatsApp</button>' +
         '</div>' +
         '<div id="panel-reject" class="panel">' +
@@ -172,6 +182,53 @@
         '</div>';
     }
 
+
+    let signaturePad = null;
+    function setupSignaturePad() {
+      const canvas = document.getElementById('accept-signature');
+      if (!canvas) return null;
+      const ctx = canvas.getContext('2d');
+      const state = { drawing: false, dirty: false };
+      const pos = (e) => {
+        const r = canvas.getBoundingClientRect();
+        const src = e.touches && e.touches[0] ? e.touches[0] : e;
+        return {
+          x: (src.clientX - r.left) * (canvas.width / r.width),
+          y: (src.clientY - r.top) * (canvas.height / r.height),
+        };
+      };
+      const start = (e) => { e.preventDefault(); state.drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+      const move = (e) => {
+        if (!state.drawing) return;
+        e.preventDefault();
+        const p = pos(e);
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#111827';
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        state.dirty = true;
+      };
+      const end = (e) => { if (e) e.preventDefault(); state.drawing = false; };
+      canvas.addEventListener('mousedown', start);
+      canvas.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', end);
+      canvas.addEventListener('touchstart', start, { passive: false });
+      canvas.addEventListener('touchmove', move, { passive: false });
+      canvas.addEventListener('touchend', end, { passive: false });
+      const clearBtn = document.getElementById('clear-signature');
+      if (clearBtn) {
+        clearBtn.onclick = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          state.dirty = false;
+        };
+      }
+      return {
+        isEmpty: () => !state.dirty,
+        toDataURL: () => canvas.toDataURL('image/png'),
+      };
+    }
+
     function wireActions(token, payload) {
       const root = document.getElementById('app');
       root.querySelectorAll('[data-open]').forEach((btn) => {
@@ -181,6 +238,7 @@
             const panel = document.getElementById('panel-' + k);
             if (panel) panel.classList.toggle('open', k === which);
           });
+          if (which === 'accept') signaturePad = setupSignaturePad();
         });
       });
 
@@ -191,8 +249,19 @@
           if (errEl) errEl.style.display = 'none';
           let message = null;
           let customerName = null;
+          let signature = null;
           if (action === 'accept') {
-            customerName = (document.getElementById('accept-name') || {}).value || null;
+            customerName = ((document.getElementById('accept-name') || {}).value || '').trim();
+            if (!customerName) {
+              if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please type your full name to accept.'; }
+              return;
+            }
+            if (!signaturePad) signaturePad = setupSignaturePad();
+            if (!signaturePad || signaturePad.isEmpty()) {
+              if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please sign in the box to accept this quote.'; }
+              return;
+            }
+            signature = signaturePad.toDataURL();
           } else if (action === 'reject') {
             message = (document.getElementById('reject-reason') || {}).value || '';
             if (!message.trim()) {
@@ -216,6 +285,7 @@
               p_action: action,
               p_message: message,
               p_customer_name: customerName,
+              p_signature: signature,
             });
             if (!result || result.ok === false) {
               throw new Error((result && result.error) || 'Could not save your response');
@@ -223,6 +293,7 @@
             openWhatsApp(result.whatsapp_phone, result.drafted_message);
             // Re-render locked state if user returns
             payload.status = result.status;
+            if (result.accepted_by_name) payload.accepted_by_name = result.accepted_by_name;
             const actions = root.querySelector('.actions');
             if (actions) actions.outerHTML = actionsHtml(payload);
           } catch (e) {
