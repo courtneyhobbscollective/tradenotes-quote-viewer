@@ -12,18 +12,30 @@
     .logo { max-width:160px; max-height:52px; object-fit:contain; display:block; }
     .body { padding:22px; }
     h1 { margin:0 0 8px; font-size:22px; }
+    h2 { margin:0 0 8px; font-size:16px; }
     p { margin:0 0 10px; color:#4b5563; line-height:1.45; font-size:15px; }
     .slot { background:#f8fafc; border-radius:12px; padding:14px; margin:16px 0; }
     .slot strong { display:block; font-size:18px; color:#111827; margin-top:4px; }
     .btn-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
-    button { flex:1; min-width:140px; border:0; border-radius:10px; padding:14px; font-size:15px; font-weight:700; cursor:pointer; }
+    button { border:0; border-radius:10px; padding:14px; font-size:15px; font-weight:700; cursor:pointer; }
+    .btn-row > button { flex:1; min-width:140px; }
     .yes { background:#16a34a; color:#fff; }
     .no { background:#fff; color:#b91c1c; border:1.5px solid #fecaca; }
+    .go { width:100%; background:#111827; color:#fff; margin-top:10px; }
     button:disabled { opacity:.55; }
     .banner { margin-top:14px; border-radius:10px; padding:12px 14px; font-size:14px; font-weight:600; }
     .ok { background:#ecfdf5; color:#047857; }
     .bad { background:#fef2f2; color:#b91c1c; }
+    .info { background:#eff6ff; color:#1d4ed8; }
     .err { padding:40px 20px; text-align:center; color:#6b7280; }
+    .panel { display:none; margin-top:14px; background:#f8fafc; border-radius:12px; padding:14px; border:1px solid #e5e7eb; }
+    .panel.open { display:block; }
+    .panel label { display:block; font-size:12px; font-weight:700; color:#6b7280; margin:10px 0 6px; }
+    .panel input { width:100%; box-sizing:border-box; border:1px solid #d1d5db; border-radius:8px; padding:12px; font-size:15px; font-family:inherit; background:#fff; }
+    .alts { display:flex; flex-direction:column; gap:8px; margin-top:4px; }
+    .alt { text-align:left; background:#fff; border:1.5px solid #bfdbfe; color:#1d4ed8; padding:12px; border-radius:10px; font-weight:700; font-size:14px; }
+    .alt.selected { background:#2563eb; border-color:#2563eb; color:#fff; }
+    .hint { font-size:13px; color:#6b7280; margin:0 0 8px; }
   </style>
 </head>
 <body>
@@ -43,6 +55,12 @@
       const d = v ? new Date(v) : null;
       if (!d || Number.isNaN(d.getTime())) return 'the proposed time';
       return d.toLocaleString('en-GB', { weekday:'long', day:'numeric', month:'long', hour:'2-digit', minute:'2-digit' });
+    }
+    function toLocalInputValue(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
     }
     async function rpc(name, body) {
       const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + name, {
@@ -79,22 +97,48 @@
           : null;
         const biz = brand.business_name || 'Your tradesperson';
         const when = niceWhen(payload.proposed_scheduled_at || payload.scheduled_at);
-        const locked = payload.booking_status === 'confirmed' || payload.booking_status === 'declined';
+        const alternatives = Array.isArray(payload.booking_alternatives)
+          ? payload.booking_alternatives.filter(Boolean)
+          : [];
 
-        function render(status) {
+        function render(status, extra) {
+          const locked = status === 'confirmed' || status === 'declined';
           let actions = '';
           if (status === 'confirmed') {
-            actions = '<div class="banner ok">Thanks — this booking is confirmed.</div>';
+            actions = '<div class="banner ok">Thanks — this booking is confirmed' +
+              (extra && extra.scheduled_at ? ' for <strong>' + esc(niceWhen(extra.scheduled_at)) + '</strong>' : '') +
+              '.</div>';
           } else if (status === 'declined') {
-            actions = '<div class="banner bad">Thanks for letting them know. They’ll be in touch with another time.</div>';
+            actions = '<div class="banner bad">Thanks for letting them know.' +
+              (extra && extra.suggested_at
+                ? ' We’ve passed on your suggested time (<strong>' + esc(niceWhen(extra.suggested_at)) + '</strong>).'
+                : ' They’ll be in touch with another time.') +
+              '</div>';
           } else {
+            const altHtml = alternatives.length
+              ? ('<p class="hint">These other times are free for them:</p><div class="alts" id="alts">' +
+                  alternatives.map((iso, i) =>
+                    '<button type="button" class="alt" data-iso="' + esc(iso) + '">' + esc(niceWhen(iso)) + '</button>'
+                  ).join('') +
+                '</div>')
+              : '<p class="hint">No other free slots were listed — suggest a time that works for you below.</p>';
+
             actions =
               '<div class="btn-row">' +
                 '<button type="button" class="yes" id="confirm">Yes, that works</button>' +
-                '<button type="button" class="no" id="decline">Can’t make it</button>' +
+                '<button type="button" class="no" id="cant">Can’t make it</button>' +
+              '</div>' +
+              '<div id="reschedule" class="panel">' +
+                '<h2>No problem — pick another time</h2>' +
+                altHtml +
+                '<label for="suggest">Or suggest a date &amp; time</label>' +
+                '<input id="suggest" type="datetime-local" />' +
+                '<button type="button" class="go" id="send-suggestion">Send my suggestion</button>' +
+                '<p class="hint" style="margin-top:10px">Choosing one of their free slots books it straight away. A custom suggestion goes back to them to confirm.</p>' +
               '</div>' +
               '<div id="err" class="banner bad" style="display:none"></div>';
           }
+
           app.innerHTML =
             '<div class="card">' +
               '<div class="header" style="background:' + primary + '">' +
@@ -112,34 +156,69 @@
               '</div>' +
             '</div>';
 
-          if (!locked) {
-            const err = document.getElementById('err');
-            const wire = (id, action) => {
-              document.getElementById(id).addEventListener('click', async () => {
-                const btn = document.getElementById(id);
-                btn.disabled = true;
-                try {
-                  const result = await rpc('respond_to_public_booking', {
-                    p_token: token,
-                    p_action: action,
-                  });
-                  if (!result || result.ok === false) throw new Error((result && result.error) || 'Could not save');
-                  render(result.status);
-                } catch (e) {
-                  if (err) {
-                    err.style.display = 'block';
-                    err.textContent = e.message || 'Something went wrong';
-                  }
-                  btn.disabled = false;
-                }
-              });
-            };
-            wire('confirm', 'confirm');
-            wire('decline', 'decline');
-          }
+          if (locked) return;
+
+          const err = document.getElementById('err');
+          const showErr = (msg) => {
+            if (!err) return;
+            err.style.display = 'block';
+            err.textContent = msg;
+          };
+
+          const submit = async (action, suggestedAt, btn) => {
+            if (btn) btn.disabled = true;
+            try {
+              const body = { p_token: token, p_action: action };
+              if (suggestedAt) body.p_suggested_at = suggestedAt;
+              const result = await rpc('respond_to_public_booking', body);
+              if (!result || result.ok === false) throw new Error((result && result.error) || 'Could not save');
+              render(result.status, result);
+            } catch (e) {
+              showErr(e.message || 'Something went wrong');
+              if (btn) btn.disabled = false;
+            }
+          };
+
+          document.getElementById('confirm').addEventListener('click', (e) => {
+            submit('confirm', null, e.currentTarget);
+          });
+
+          document.getElementById('cant').addEventListener('click', () => {
+            const panel = document.getElementById('reschedule');
+            if (panel) panel.classList.add('open');
+            const suggest = document.getElementById('suggest');
+            if (suggest && !suggest.value) {
+              const base = new Date(payload.proposed_scheduled_at || Date.now());
+              base.setDate(base.getDate() + 1);
+              base.setHours(9, 0, 0, 0);
+              suggest.value = toLocalInputValue(base.toISOString());
+            }
+          });
+
+          document.querySelectorAll('.alt').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              document.querySelectorAll('.alt').forEach((b) => b.classList.remove('selected'));
+              btn.classList.add('selected');
+              submit('choose', btn.getAttribute('data-iso'), btn);
+            });
+          });
+
+          document.getElementById('send-suggestion').addEventListener('click', (e) => {
+            const raw = (document.getElementById('suggest') || {}).value;
+            if (!raw) {
+              showErr('Please pick a suggested date and time.');
+              return;
+            }
+            const iso = new Date(raw).toISOString();
+            if (Number.isNaN(Date.parse(iso))) {
+              showErr('That date doesn’t look valid.');
+              return;
+            }
+            submit('decline', iso, e.currentTarget);
+          });
         }
 
-        render(payload.booking_status);
+        render(payload.booking_status, payload);
       } catch (e) {
         app.innerHTML = '<p class="err">Booking not found.</p>';
       }
