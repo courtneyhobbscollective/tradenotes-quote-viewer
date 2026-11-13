@@ -56,11 +56,23 @@
     .status-banner.warn { background:#fff7ed; color:#c2410c; }
     .status-banner.bad { background:#fef2f2; color:#b91c1c; }
     .status-banner.info { background:#eff6ff; color:#1d4ed8; }
-    .sig-wrap { background:#fff; border:1px solid #d1d5db; border-radius:8px; margin-bottom:10px; overflow:hidden; }
-    .sig-wrap canvas { display:block; width:100%; height:140px; touch-action:none; background:#fff; }
+    .sig-label-row { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:6px; }
+    .sig-label-row label { margin:0; }
+    .sig-help { font-size:12px; color:#6b7280; font-weight:600; }
+    .sig-wrap { background:#fff; border:1.5px dashed #93c5fd; border-radius:8px; margin-bottom:10px; overflow:hidden; }
+    .sig-pad { position:relative; }
+    .sig-wrap canvas { display:block; width:100%; height:150px; touch-action:none; background:#fff; cursor:crosshair; }
+    .sig-overlay {
+      position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:4px; padding:12px; text-align:center; pointer-events:none; background:rgba(239,246,255,0.72);
+      transition:opacity .15s ease;
+    }
+    .sig-overlay.hidden { opacity:0; }
+    .sig-overlay-title { font-size:15px; font-weight:800; color:#1d4ed8; }
+    .sig-overlay-body { font-size:13px; line-height:1.35; color:#1e40af; max-width:260px; }
     .sig-tools { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-top:1px solid #e5e7eb; background:#f8fafc; }
     .sig-tools button { border:0; background:transparent; color:#2563eb; font-weight:700; font-size:13px; cursor:pointer; padding:0; }
-    .sig-hint { font-size:12px; color:#9ca3af; }
+    .sig-hint { font-size:12px; color:#6b7280; }
   </style>
 </head>
 <body>
@@ -163,10 +175,16 @@
         '<div id="panel-accept" class="panel">' +
           '<label for="accept-name">Full name</label>' +
           '<input id="accept-name" type="text" placeholder="Type your full name" autocomplete="name" />' +
-          '<label>Signature</label>' +
+          '<div class="sig-label-row"><label for="accept-signature">Your signature</label><span class="sig-help">Required to accept</span></div>' +
           '<div class="sig-wrap">' +
-            '<canvas id="accept-signature" width="600" height="140"></canvas>' +
-            '<div class="sig-tools"><span class="sig-hint">Sign above with your finger</span><button type="button" id="clear-signature">Clear</button></div>' +
+            '<div class="sig-pad">' +
+              '<canvas id="accept-signature" width="600" height="150" aria-label="Signature pad — draw with your finger or mouse"></canvas>' +
+              '<div id="sig-overlay" class="sig-overlay">' +
+                '<div class="sig-overlay-title">Sign here</div>' +
+                '<div class="sig-overlay-body">Use your finger on a phone, or your mouse / trackpad on a computer, to draw your signature in this box</div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="sig-tools"><span class="sig-hint">Draw in the white box above</span><button type="button" id="clear-signature">Clear</button></div>' +
           '</div>' +
           '<button type="button" class="go" data-submit="accept">Accept quote &amp; open WhatsApp</button>' +
         '</div>' +
@@ -187,8 +205,15 @@
     function setupSignaturePad() {
       const canvas = document.getElementById('accept-signature');
       if (!canvas) return null;
+      const overlay = document.getElementById('sig-overlay');
       const ctx = canvas.getContext('2d');
       const state = { drawing: false, dirty: false };
+      const setOverlay = (show) => {
+        if (!overlay) return;
+        overlay.classList.toggle('hidden', !show);
+        overlay.setAttribute('aria-hidden', show ? 'false' : 'true');
+      };
+      setOverlay(true);
       const pos = (e) => {
         const r = canvas.getBoundingClientRect();
         const src = e.touches && e.touches[0] ? e.touches[0] : e;
@@ -197,7 +222,14 @@
           y: (src.clientY - r.top) * (canvas.height / r.height),
         };
       };
-      const start = (e) => { e.preventDefault(); state.drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+      const start = (e) => {
+        e.preventDefault();
+        state.drawing = true;
+        setOverlay(false);
+        const p = pos(e);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+      };
       const move = (e) => {
         if (!state.drawing) return;
         e.preventDefault();
@@ -221,6 +253,7 @@
         clearBtn.onclick = () => {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           state.dirty = false;
+          setOverlay(true);
         };
       }
       return {
