@@ -17,12 +17,14 @@
     .slot { background:#f8fafc; border-radius:12px; padding:14px; margin:16px 0; }
     .slot strong { display:block; font-size:18px; color:#111827; margin-top:4px; }
     .btn-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
-    button { border:0; border-radius:10px; padding:14px; font-size:15px; font-weight:700; cursor:pointer; }
-    .btn-row > button { flex:1; min-width:140px; }
+    button, a.btn { border:0; border-radius:10px; padding:14px; font-size:15px; font-weight:700; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; }
+    .btn-row > button, .btn-row > a.btn { flex:1; min-width:140px; }
     .yes { background:#16a34a; color:#fff; }
     .no { background:#fff; color:#b91c1c; border:1.5px solid #fecaca; }
     .go { width:100%; background:#111827; color:#fff; margin-top:10px; }
-    button:disabled { opacity:.55; }
+    .cal { background:#2563eb; color:#fff; }
+    .cal-soft { background:#eff6ff; color:#1d4ed8; border:1.5px solid #bfdbfe; }
+    button:disabled, a.btn[aria-disabled="true"] { opacity:.55; pointer-events:none; }
     .banner { margin-top:14px; border-radius:10px; padding:12px 14px; font-size:14px; font-weight:600; }
     .ok { background:#ecfdf5; color:#047857; }
     .bad { background:#fef2f2; color:#b91c1c; }
@@ -36,6 +38,8 @@
     .alt { text-align:left; background:#fff; border:1.5px solid #bfdbfe; color:#1d4ed8; padding:12px; border-radius:10px; font-weight:700; font-size:14px; }
     .alt.selected { background:#2563eb; border-color:#2563eb; color:#fff; }
     .hint { font-size:13px; color:#6b7280; margin:0 0 8px; }
+    .cal-box { margin-top:16px; padding-top:14px; border-top:1px solid #e5e7eb; }
+    .cal-box h2 { margin-bottom:6px; }
   </style>
 </head>
 <body>
@@ -61,6 +65,91 @@
       if (Number.isNaN(d.getTime())) return '';
       const pad = (n) => String(n).padStart(2, '0');
       return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function toUtcStamp(d) {
+      return d.getUTCFullYear() + pad2(d.getUTCMonth()+1) + pad2(d.getUTCDate()) + 'T' +
+        pad2(d.getUTCHours()) + pad2(d.getUTCMinutes()) + pad2(d.getUTCSeconds()) + 'Z';
+    }
+    function icsEscape(text) {
+      return String(text || '')
+        .replace(/\\/g, '\\\\')
+        .replace(/\n/g, '\\n')
+        .replace(/,/g, '\\,')
+        .replace(/;/g, '\\;');
+    }
+    function buildEventMeta(payload, whenIso) {
+      const brand = payload.branding || {};
+      const biz = brand.business_name || 'Your tradesperson';
+      const start = new Date(whenIso);
+      const mins = Number(brand.default_visit_duration_minutes) > 0
+        ? Number(brand.default_visit_duration_minutes)
+        : 120;
+      const end = new Date(start.getTime() + mins * 60 * 1000);
+      const title = biz + ' — booked work';
+      const details = 'Confirmed booking with ' + biz +
+        (payload.address ? (' at ' + payload.address) : '') +
+        '. Reminder set for the day before.';
+      return { biz, start, end, title, details, location: payload.address || '', mins };
+    }
+    function googleCalUrl(meta) {
+      const dates = toUtcStamp(meta.start) + '/' + toUtcStamp(meta.end);
+      return 'https://calendar.google.com/calendar/render?action=TEMPLATE' +
+        '&text=' + encodeURIComponent(meta.title) +
+        '&dates=' + encodeURIComponent(dates) +
+        '&details=' + encodeURIComponent(meta.details) +
+        '&location=' + encodeURIComponent(meta.location);
+    }
+    function buildIcs(meta) {
+      const uid = 'booking-' + Date.now() + '@tradenotes';
+      return [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//TradeNotes//Booking//EN',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        'BEGIN:VEVENT',
+        'UID:' + uid,
+        'DTSTAMP:' + toUtcStamp(new Date()),
+        'DTSTART:' + toUtcStamp(meta.start),
+        'DTEND:' + toUtcStamp(meta.end),
+        'SUMMARY:' + icsEscape(meta.title),
+        'DESCRIPTION:' + icsEscape(meta.details),
+        meta.location ? ('LOCATION:' + icsEscape(meta.location)) : null,
+        'BEGIN:VALARM',
+        'TRIGGER:-P1D',
+        'ACTION:DISPLAY',
+        'DESCRIPTION:Reminder: work booked for tomorrow',
+        'END:VALARM',
+        'END:VEVENT',
+        'END:VCALENDAR'
+      ].filter(Boolean).join('\r\n');
+    }
+    function downloadIcs(meta) {
+      const blob = new Blob([buildIcs(meta)], { type: 'text/calendar;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tradenotes-booking.ics';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+    function calendarActionsHtml(payload, whenIso) {
+      if (!whenIso) return '';
+      const meta = buildEventMeta(payload, whenIso);
+      const gUrl = googleCalUrl(meta);
+      return (
+        '<div class="cal-box">' +
+          '<h2>Add to your calendar</h2>' +
+          '<p class="hint">Includes a reminder the day before so you don’t forget.</p>' +
+          '<div class="btn-row">' +
+            '<a class="btn cal" id="add-google" href="' + esc(gUrl) + '" target="_blank" rel="noopener">Google Calendar</a>' +
+            '<button type="button" class="cal-soft" id="add-ics">Apple / Outlook (.ics)</button>' +
+          '</div>' +
+        '</div>'
+      );
     }
     async function rpc(name, body) {
       const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + name, {
@@ -101,13 +190,23 @@
           ? payload.booking_alternatives.filter(Boolean)
           : [];
 
+        function wireCalendar(whenIso) {
+          const icsBtn = document.getElementById('add-ics');
+          if (!icsBtn || !whenIso) return;
+          icsBtn.addEventListener('click', function () {
+            downloadIcs(buildEventMeta(payload, whenIso));
+          });
+        }
+
         function render(status, extra) {
           const locked = status === 'confirmed' || status === 'declined';
           let actions = '';
           if (status === 'confirmed') {
+            const confirmedAt = (extra && extra.scheduled_at) || payload.scheduled_at || payload.proposed_scheduled_at;
             actions = '<div class="banner ok">Thanks — this booking is confirmed' +
-              (extra && extra.scheduled_at ? ' for <strong>' + esc(niceWhen(extra.scheduled_at)) + '</strong>' : '') +
-              '.</div>';
+              (confirmedAt ? ' for <strong>' + esc(niceWhen(confirmedAt)) + '</strong>' : '') +
+              '.</div>' +
+              calendarActionsHtml(payload, confirmedAt);
           } else if (status === 'declined') {
             actions = '<div class="banner bad">Thanks for letting them know.' +
               (extra && extra.suggested_at
@@ -117,7 +216,7 @@
           } else {
             const altHtml = alternatives.length
               ? ('<p class="hint">These other times are free for them:</p><div class="alts" id="alts">' +
-                  alternatives.map((iso, i) =>
+                  alternatives.map((iso) =>
                     '<button type="button" class="alt" data-iso="' + esc(iso) + '">' + esc(niceWhen(iso)) + '</button>'
                   ).join('') +
                 '</div>')
@@ -156,6 +255,11 @@
               '</div>' +
             '</div>';
 
+          if (status === 'confirmed') {
+            const confirmedAt = (extra && extra.scheduled_at) || payload.scheduled_at || payload.proposed_scheduled_at;
+            wireCalendar(confirmedAt);
+            return;
+          }
           if (locked) return;
 
           const err = document.getElementById('err');
@@ -172,6 +276,8 @@
               if (suggestedAt) body.p_suggested_at = suggestedAt;
               const result = await rpc('respond_to_public_booking', body);
               if (!result || result.ok === false) throw new Error((result && result.error) || 'Could not save');
+              if (result.scheduled_at) payload.scheduled_at = result.scheduled_at;
+              if (result.status === 'confirmed') payload.booking_status = 'confirmed';
               render(result.status, result);
             } catch (e) {
               showErr(e.message || 'Something went wrong');
